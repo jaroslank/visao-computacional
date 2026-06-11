@@ -1,0 +1,80 @@
+{
+  "categorias": {
+    "Frutas": [
+      {
+        "palavra": "UVA",
+        "dica": "Pequena e geralmente roxa ou verde"
+      }
+    ],
+    "Animais": [
+      {
+        "palavra": "LEAO",
+        "dica": "O rei da selva"
+      },
+      {
+        "palavra": "AVE",
+        "dica": "Animal que voa"
+      },
+      {
+        "palavra": "ONCA",
+        "dica": "Felino brasileiro pintado"
+      },
+      {
+        "palavra": "CAVALO",
+        "dica": "Animal para montaria"
+      }
+    ],
+    "Familia": [
+      {
+        "palavra": "VOVO",
+        "dica": "Pai do seu pai ou da sua mãe"
+      }
+    ],
+    "Natureza": [
+      {
+        "palavra": "LUA",
+        "dica": "Satélite natural da Terra"
+      },
+      {
+        "palavra": "VALE",
+        "dica": "Depressão entre montanhas"
+      },
+      {
+        "palavra": "NUVEM",
+        "dica": "Fica no céu e chove"
+      }
+    ],
+    "Veiculos": [
+      {
+        "palavra": "AVIAO",
+        "dica": "Meio de transporte aéreo"
+      },
+      {
+        "palavra": "CANOA",
+        "dica": "Barco pequeno a remo"
+      }
+    ],
+    "Outros": [
+      {
+        "palavra": "OVO",
+        "dica": "Vem da galinha"
+      },
+      {
+        "palavra": "OLEO",
+        "dica": "Usado para fritar alimentos"
+      },
+      {
+        "palavra": "ALVO",
+        "dica": "Onde a flecha deve acertar"
+      },
+      {
+        "palavra": "NOVO",
+        "dica": "O contrário de velho"
+      },
+      {
+        "palavra": "COLA",
+        "dica": "Usada para grudar papel"
+      }
+    ]
+  }
+}

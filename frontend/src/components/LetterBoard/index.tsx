@@ -14,14 +14,14 @@ function LetterBoard({ title, gameContent }: LetterBoardProps) {
   console.log(gameContent);
 
   const alphabet: WordType[] = Array.from({ length: 26 }, (_, i) => ({
-    word: String.fromCharCode(65 + i), // 65 é o código ASCII para 'A'
+    word: String.fromCharCode(65 + i),
     alreadyUsed: false,
   }));
 
   return (
     <div className="mx-auto w-full justify-center items-center flex gap-5">
       {/* botao para confirmar o envio da camera */}
-      <Button title="ENVIAR SINAL" />
+      <Button title="ENVIAR SINAL" color="yellow" />
       {/* letras */}
       <div className="text-center">
         <p>{title}</p>

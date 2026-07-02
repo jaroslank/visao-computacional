@@ -3,6 +3,7 @@ import Button from "../Button";
 interface LetterBoardProps {
   title?: string;
   gameContent?: any;
+  disparo?: () => void;
 }
 
 type WordType = {
@@ -10,7 +11,7 @@ type WordType = {
   alreadyUsed: boolean;
 };
 
-function LetterBoard({ title, gameContent }: LetterBoardProps) {
+function LetterBoard({ title, gameContent, disparo }: LetterBoardProps) {
   console.log(gameContent);
 
   const alphabet: WordType[] = Array.from({ length: 26 }, (_, i) => ({
@@ -21,7 +22,7 @@ function LetterBoard({ title, gameContent }: LetterBoardProps) {
   return (
     <div className="mx-auto w-full justify-center items-center flex gap-5">
       {/* botao para confirmar o envio da camera */}
-      <Button title="ENVIAR SINAL" color="yellow" />
+      <Button title="ENVIAR SINAL" color="yellow" action={disparo} />
       {/* letras */}
       <div className="text-center">
         <p>{title}</p>

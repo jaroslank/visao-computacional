@@ -1,132 +1,206 @@
 """Classificação em tempo real usando `dataset.csv` como base.
 
-O script treina (ou carrega) um classificador + scaler a partir de `dataset.csv`
-(e codificador de labels) e usa a câmera + MediaPipe para extrair landmarks
-em tempo real, prevê a letra e sobrepõe no frame.
+Este script usa o mesmo pré-processamento do treino, um modelo escolhido por
+validação cruzada e suavização temporal para reduzir oscilações entre letras.
 
 Uso:
-    python scripts/classify_live_dataset.py
-    python scripts/classify_live_dataset.py --model model.joblib
+    python classify_live_dataset.py
+    python classify_live_dataset.py --model model.joblib
 
 Pressione `q` para sair.
 """
+
+from __future__ import annotations
+
 import argparse
-import os
-import time
+from collections import Counter, deque
+from pathlib import Path
 
 import cv2
+import joblib
 import numpy as np
-import pandas as pd
 
+from src.sign_language.feature_engineering import extract_features_from_landmarks, load_dataset
 from src.vision.camera import Camera
 from src.vision.hand_tracker import HandTracker
 
-from sklearn.preprocessing import LabelEncoder, StandardScaler
-from sklearn.neighbors import KNeighborsClassifier
-import joblib
+
+def train_bundle(dataset_path: str, save_model_path: str | None = None):
+    from classify_offline import build_candidate_models
+    from sklearn.ensemble import RandomForestClassifier
+    from sklearn.metrics import accuracy_score
+    from sklearn.model_selection import StratifiedKFold, cross_val_score, train_test_split
+    from sklearn.preprocessing import LabelEncoder
+    from collections import Counter
+
+    X, y_str, _, resolved_path = load_dataset(dataset_path)
+
+    label_encoder = LabelEncoder()
+    y = label_encoder.fit_transform(y_str)
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X,
+        y,
+        test_size=0.2,
+        random_state=42,
+        stratify=y,
+    )
+
+    candidate_models = build_candidate_models()
+    class_counts = Counter(y_train)
+    min_class_count = max(2, min(class_counts.values()))
+    n_splits = min(5, min_class_count)
+    cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
+
+    best_name = None
+    best_model = None
+    best_score = -1.0
+
+    for name, model in candidate_models.items():
+        scores = cross_val_score(model, X_train, y_train, cv=cv, scoring="balanced_accuracy")
+        score = float(np.mean(scores))
+        print(f"[{name}] balanced_accuracy CV: {score:.4f}")
+        if score > best_score:
+            best_name = name
+            best_model = model
+            best_score = score
+
+    best_model.fit(X_train, y_train)
+    holdout_acc = float(accuracy_score(y_test, best_model.predict(X_test)))
+
+    bundle = {
+        "model": best_model,
+        "label_encoder": label_encoder,
+        "feature_version": "v2_normalized_engineered",
+        "model_name": best_name,
+        "cv_score": best_score,
+        "holdout_accuracy": holdout_acc,
+        "dataset_path": resolved_path,
+    }
+
+    if save_model_path:
+        Path(save_model_path).parent.mkdir(parents=True, exist_ok=True)
+        joblib.dump(bundle, save_model_path)
+        print(f"Modelo salvo em: {save_model_path}")
+
+    return bundle
 
 
-def extract_features_from_landmarks(landmarks):
-    """Extrai vetor [x0,y0,z0,...,x20,y20,z20] de `landmarks` do MediaPipe."""
-    pts = landmarks.landmark
-    feat = []
-    for i in range(21):
-        p = pts[i]
-        feat.extend([p.x, p.y, p.z])
-    return np.array(feat, dtype=np.float32)
+def predict_with_confidence(model, features: np.ndarray):
+    pred = model.predict([features])[0]
+    confidence = 1.0
+    if hasattr(model, "predict_proba"):
+        proba = model.predict_proba([features])[0]
+        confidence = float(np.max(proba))
+    return pred, confidence
 
 
-def train_from_csv(path):
-    df = pd.read_csv(path)
-    if 'label' not in df.columns:
-        raise ValueError('CSV precisa ter coluna `label`.')
-
-    X = df.drop(columns=['label']).values
-    y = df['label'].values
-
-    le = LabelEncoder()
-    y_enc = le.fit_transform(y)
-
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X)
-
-    clf = KNeighborsClassifier(n_neighbors=3)
-    clf.fit(X_scaled, y_enc)
-
-    return {'model': clf, 'scaler': scaler, 'label_encoder': le}
+def summarize_buffer(buffer):
+    if not buffer:
+        return None, 0.0, 0
+    labels = [label for label, _ in buffer]
+    best_label, votes = Counter(labels).most_common(1)[0]
+    confidences = [conf for label, conf in buffer if label == best_label]
+    avg_conf = float(np.mean(confidences)) if confidences else 0.0
+    return best_label, avg_conf, votes
 
 
-def main(dataset_path='dataset.csv', model_path=None, min_consensus=3):
-    # Load or train model
-    if model_path and os.path.exists(model_path):
-        print('Carregando modelo de', model_path)
-        data = joblib.load(model_path)
-        clf = data['model']
-        scaler = data['scaler']
-        le = data['label_encoder']
+def main(dataset_path: str = "dataset.csv", model_path: str | None = None, min_votes: int = 4, min_confidence: float = 0.65):
+    if model_path and Path(model_path).exists():
+        print(f"Carregando modelo de {model_path}")
+        bundle = joblib.load(model_path)
     else:
-        print('Treinando modelo a partir de', dataset_path)
-        data = train_from_csv(dataset_path)
-        clf = data['model']
-        scaler = data['scaler']
-        le = data['label_encoder']
-        if model_path:
-            joblib.dump({'model': clf, 'scaler': scaler, 'label_encoder': le}, model_path)
-            print('Modelo salvo em', model_path)
+        print(f"Treinando modelo a partir de {dataset_path}")
+        bundle = train_bundle(dataset_path, save_model_path=model_path)
+
+    model = bundle["model"]
+    label_encoder = bundle["label_encoder"]
+    model_name = bundle.get("model_name", "unknown")
 
     cam = Camera()
     tracker = HandTracker()
-
-    consensus_count = 0
-    last_pred = None
-    stable_pred = None
-    last_time = 0
+    recent_predictions = deque(maxlen=7)
+    no_hand_frames = 0
+    stable_label = None
 
     try:
         while True:
             ret, frame = cam.read_frame()
             if not ret:
-                print('Falha ao ler frame da câmera')
+                print("Falha ao ler frame da câmera")
                 break
 
             hands = tracker.find_hands(frame)
-            display_text = 'Nenhuma mão'
 
             if hands:
+                no_hand_frames = 0
                 hand = hands[0]
                 tracker.draw_landmarks(frame, hand)
-                feat = extract_features_from_landmarks(hand)
-                feat_scaled = scaler.transform([feat])
-                pred_enc = clf.predict(feat_scaled)[0]
-                pred_label = le.inverse_transform([pred_enc])[0]
 
-                # Consensus smoothing
-                if pred_label == last_pred:
-                    consensus_count += 1
+                features = extract_features_from_landmarks(hand)
+                pred_enc, confidence = predict_with_confidence(model, features)
+                pred_label = label_encoder.inverse_transform([pred_enc])[0]
+
+                recent_predictions.append((pred_label, confidence))
+                voted_label, avg_confidence, votes = summarize_buffer(recent_predictions)
+
+                if voted_label and votes >= min_votes and avg_confidence >= min_confidence:
+                    stable_label = voted_label
+
+                if stable_label:
+                    display_text = f"{stable_label} ({avg_confidence:.2f})"
                 else:
-                    consensus_count = 1
-                    last_pred = pred_label
+                    display_text = f"{pred_label} ({confidence:.2f})"
 
-                if consensus_count >= min_consensus:
-                    stable_pred = pred_label
-                    last_time = time.time()
-
-                if stable_pred:
-                    display_text = f'Letra: {stable_pred}'
-                else:
-                    display_text = f'... detectando: {pred_label}'
+                cv2.putText(
+                    frame,
+                    f"Modelo: {model_name}",
+                    (30, 40),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.8,
+                    (255, 255, 0),
+                    2,
+                    cv2.LINE_AA,
+                )
+                cv2.putText(
+                    frame,
+                    f"Letra: {display_text}",
+                    (30, 80),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    1.6,
+                    (0, 255, 0),
+                    3,
+                    cv2.LINE_AA,
+                )
             else:
-                # reset small counters when no hand
-                last_pred = None
-                consensus_count = 0
+                no_hand_frames += 1
+                if no_hand_frames > 8:
+                    recent_predictions.clear()
+                    stable_label = None
+                cv2.putText(
+                    frame,
+                    f"Modelo: {model_name}",
+                    (30, 40),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.8,
+                    (255, 255, 0),
+                    2,
+                    cv2.LINE_AA,
+                )
+                cv2.putText(
+                    frame,
+                    "Nenhuma mao detectada",
+                    (30, 80),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    1.2,
+                    (0, 0, 255),
+                    3,
+                    cv2.LINE_AA,
+                )
 
-            # Mostrar texto no frame
-            cv2.putText(frame, display_text, (30, 60), cv2.FONT_HERSHEY_SIMPLEX,
-                        2, (0, 255, 0), 3, cv2.LINE_AA)
-
-            cv2.imshow('Classificador Live (dataset)', frame)
+            cv2.imshow("Classificador Live (dataset)", frame)
             key = cv2.waitKey(1) & 0xFF
-            if key == ord('q'):
+            if key in (ord("q"), ord("Q"), 27):  # q, Q, ou ESC
                 break
 
     finally:
@@ -134,11 +208,12 @@ def main(dataset_path='dataset.csv', model_path=None, min_consensus=3):
         cv2.destroyAllWindows()
 
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Classificador live usando dataset.csv')
-    parser.add_argument('--dataset', '-d', default='dataset.csv', help='Caminho para dataset.csv')
-    parser.add_argument('--model', '-m', default=None, help='Caminho para salvar/carregar modelo (joblib)')
-    parser.add_argument('--consensus', '-c', type=int, default=3, help='Quantidade de frames consecutivos para confirmar a predição')
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Classificador live usando dataset.csv")
+    parser.add_argument("--dataset", "-d", default="dataset.csv", help="Caminho para dataset.csv")
+    parser.add_argument("--model", "-m", default=None, help="Caminho para salvar/carregar modelo (joblib)")
+    parser.add_argument("--min-votes", type=int, default=4, help="Quantidade mínima de votos na janela temporal")
+    parser.add_argument("--min-confidence", type=float, default=0.65, help="Confiança mínima média para estabilizar")
     args = parser.parse_args()
 
-    main(dataset_path=args.dataset, model_path=args.model, min_consensus=args.consensus)
+    main(dataset_path=args.dataset, model_path=args.model, min_votes=args.min_votes, min_confidence=args.min_confidence)

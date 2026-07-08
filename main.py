@@ -1,88 +1,195 @@
 import cv2
-import time
+import joblib
+import numpy as np
 
-# Importa todas as nossas classes dos módulos
 from src.vision.camera import Camera
 from src.vision.hand_tracker import HandTracker
-from src.sign_language.classifier import LibrasClassifier
+
 from src.core.gesture_recognizer import GestureRecognizer
 from src.core.game_state import GameState
 from src.ui.renderer import UIRenderer
 
+from src.sign_language.feature_engineering import (
+    extract_features_from_landmarks
+)
+
+
+def predict_with_confidence(model, features):
+    pred = model.predict([features])[0]
+
+    confidence = 1.0
+
+    if hasattr(model, "predict_proba"):
+        proba = model.predict_proba([features])[0]
+        confidence = float(np.max(proba))
+
+    return pred, confidence
+
+
 def main():
-    print("Iniciando componentes...")
+    print("========================================")
+    print("JOGO DA FORCA LIBRAS")
+    print("Classificação baseada no dataset.csv")
+    print("========================================")
+
     try:
-        print("- Câmera")
+        print("[1/6] Inicializando câmera...")
         camera = Camera()
-        print("- Tracker MediaPipe")
+
+        print("[2/6] Inicializando MediaPipe...")
         hand_tracker = HandTracker()
-        print("- Jogo base")
-        classifier = LibrasClassifier()
+
+        print("[3/6] Carregando modelo treinado...")
+        bundle = joblib.load("model.joblib")
+
+        model = bundle["model"]
+        label_encoder = bundle["label_encoder"]
+
+        print("[4/6] Inicializando reconhecimento...")
         gesture_recognizer = GestureRecognizer()
+
+        print("[5/6] Inicializando estado do jogo...")
         game_state = GameState()
-        print("- UI Render")
+
+        print("[6/6] Inicializando interface...")
         renderer = UIRenderer()
+
+        print("\nSistema iniciado com sucesso!")
+        print(f"Dica atual: {game_state.dica}")
+
     except Exception as e:
-        print(f"ERRO CRÍTICO NA INICIALIZAÇÃO: {e}")
+        print(f"\nERRO CRÍTICO:")
+        print(e)
         return
 
-    print("Componentes Inicializados!")
-    print(f"A dica é: {game_state.dica}")
-
-    # Loop principal do jogo
     while True:
-        # 2. Captura de Imagem
+
         ret, frame = camera.read_frame()
+
         if not ret:
-            print("Erro ao capturar o frame da câmera. Encerrando.")
+            print("Erro ao capturar frame.")
             break
 
-        # 3. Detecção e Classificação de Gestos
         hand_landmarks = hand_tracker.find_hands(frame)
+
         current_gesture = None
+        confidence = 0.0
+
         confirmed_gesture = None
         progress_ratio = 0.0
 
         if hand_landmarks:
-            # Pega a primeira mão detectada
-            mao = hand_landmarks[0]
-            
-            # Desenha os landmarks na tela
-            hand_tracker.draw_landmarks(frame, mao)
-            
-            # Classifica o gesto
-            current_gesture = classifier.classify(mao)
-            
-            # Atualiza o reconhecedor de gestos para aplicar o Dwell Time
-            confirmed_gesture, progress_ratio = gesture_recognizer.update(current_gesture)
 
-        # 4. Lógica do Jogo
+            mao = hand_landmarks[0]
+
+            hand_tracker.draw_landmarks(frame, mao)
+
+            try:
+                features = extract_features_from_landmarks(mao)
+
+                pred_enc, confidence = predict_with_confidence(
+                    model,
+                    features
+                )
+
+                current_gesture = label_encoder.inverse_transform(
+                    [pred_enc]
+                )[0]
+
+                confirmed_gesture, progress_ratio = (
+                    gesture_recognizer.update(current_gesture)
+                )
+
+            except Exception as e:
+                print(f"Erro na classificação: {e}")
+
+            cv2.putText(
+                frame,
+                f"Letra: {current_gesture}",
+                (20, 40),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                1,
+                (0, 255, 0),
+                2
+            )
+
+            cv2.putText(
+                frame,
+                f"Confianca: {confidence:.2%}",
+                (20, 80),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.8,
+                (255, 255, 0),
+                2
+            )
+
+        else:
+
+            cv2.putText(
+                frame,
+                "Nenhuma mao detectada",
+                (20, 40),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                1,
+                (0, 0, 255),
+                2
+            )
+
         if confirmed_gesture:
-            print(f"Letra confirmada: {confirmed_gesture}")
-            game_state.processar_tentativa(confirmed_gesture)
-            
-            # Se o jogo acabou (vitória ou derrota), espera um pouco e reseta
-            if game_state.verificar_vitoria() or game_state.verificar_derrota():
-                renderer.draw_game_elements(frame, game_state, current_gesture, progress_ratio)
-                cv2.imshow("Jogo da Forca em LIBRAS", frame)
-                cv2.waitKey(3000) # Pausa por 3 segundos
+
+            print(
+                f"Letra confirmada: {confirmed_gesture} "
+                f"(conf: {confidence:.2%})"
+            )
+
+            game_state.processar_tentativa(
+                confirmed_gesture
+            )
+
+            if (
+                game_state.verificar_vitoria()
+                or
+                game_state.verificar_derrota()
+            ):
+
+                renderer.draw_game_elements(
+                    frame,
+                    game_state,
+                    current_gesture,
+                    progress_ratio
+                )
+
+                cv2.imshow(
+                    "Jogo da Forca em LIBRAS",
+                    frame
+                )
+
+                cv2.waitKey(3000)
+
                 game_state.reset()
 
+        renderer.draw_game_elements(
+            frame,
+            game_state,
+            current_gesture,
+            progress_ratio
+        )
 
-        # 5. Renderização da UI
-        renderer.draw_game_elements(frame, game_state, current_gesture, progress_ratio)
+        cv2.imshow(
+            "Jogo da Forca em LIBRAS",
+            frame
+        )
 
-        # 6. Exibição do Frame
-        cv2.imshow("Jogo da Forca em LIBRAS", frame)
+        tecla = cv2.waitKey(1) & 0xFF
 
-        # 7. Condição de Saída
-        if cv2.waitKey(1) & 0xFF == ord('q'):
+        if tecla == ord("q"):
             break
 
-    # Libera os recursos
     camera.release()
     cv2.destroyAllWindows()
+
     print("Jogo encerrado.")
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()

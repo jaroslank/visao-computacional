@@ -1,3 +1,11 @@
 # React / Node
 frontend/node_modules/
 frontend/dist/
+# Ambiente virtual
+.venv/
+
+# Cache Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
